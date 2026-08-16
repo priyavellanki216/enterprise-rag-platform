@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
+import crypto from "crypto";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
@@ -34,6 +35,13 @@ async function startServer() {
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  app.use((req, res, next) => {
+    const requestId = req.header("x-request-id") || crypto.randomUUID();
+    res.setHeader("x-request-id", requestId);
+    const started = Date.now();
+    res.on("finish", () => console.log(JSON.stringify({ type: "audit", requestId, method: req.method, endpoint: req.path, status: res.statusCode, latencyMs: Date.now() - started })));
+    next();
+  });
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // tRPC API
@@ -50,6 +58,11 @@ async function startServer() {
   } else {
     serveStatic(app);
   }
+  app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error(JSON.stringify({ type: "error", requestId: res.getHeader("x-request-id"), endpoint: req.path, error: String(error) }));
+    if (res.headersSent) return next(error);
+    res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "An unexpected server error occurred.", requestId: res.getHeader("x-request-id") } });
+  });
 
   const preferredPort = parseInt(process.env.PORT || "3000");
   const port = await findAvailablePort(preferredPort);

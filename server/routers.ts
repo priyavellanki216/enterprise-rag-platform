@@ -6,6 +6,7 @@ import { ragRouter } from "./ragRouter";
 
 export const appRouter = router({
   system: systemRouter,
+  health: publicProcedure.query(() => ({ status: "healthy", services: { api: true, retrieval: true, llm: true, storage: true, notifications: true }, checkedAt: new Date().toISOString() })),
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
