@@ -1,33 +1,144 @@
+import { useMemo, useRef, useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { startLogin } from "@/const";
+import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import { Streamdown } from 'streamdown';
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Progress } from "@/components/ui/progress";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { toast } from "sonner";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Activity, ArrowUpRight, BarChart3, BookOpen, Bot, Check, ChevronRight, Clock3, Database, FileText, FolderKanban, Gauge, Headphones, Layers3, LayoutDashboard, LifeBuoy, LockKeyhole, Menu, MessageSquareText, MoreHorizontal, Plus, Search, Settings2, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, UploadCloud, Users, X, Zap } from "lucide-react";
 
-/**
- * All content in this page are only for example, replace with your own feature implementation
- * When building pages, remember your instructions in Frontend Workflow, Frontend Best Practices, Design Guide and Common Pitfalls
- */
-export default function Home() {
-  // The useAuth hook provides authentication state.
-  // To implement login/logout, call logout(), or start login from an event
-  // handler: onClick={() => startLogin()} (imported from "@/const"). Never call
-  // startLogin() during render (no href={startLogin()}) — it mints a one-time
-  // nonce cookie and must run only at the moment of navigation.
-  let { user, loading, error, isAuthenticated, logout } = useAuth();
+type View = "overview" | "documents" | "search" | "chat" | "evaluation" | "observability" | "admin";
 
-  // If theme is switchable in App.tsx, we can implement theme toggling like this:
-  // const { theme, toggleTheme } = useTheme();
+const nav = [
+  { id: "overview" as View, label: "Overview", icon: LayoutDashboard },
+  { id: "documents" as View, label: "Knowledge base", icon: FolderKanban },
+  { id: "search" as View, label: "Semantic search", icon: Search },
+  { id: "chat" as View, label: "AI workspace", icon: MessageSquareText },
+];
+const opsNav = [
+  { id: "evaluation" as View, label: "Evaluation", icon: ShieldCheck },
+  { id: "observability" as View, label: "Observability", icon: Activity },
+  { id: "admin" as View, label: "Admin console", icon: Settings2 },
+];
+const demoBases = [
+  { id: 1, name: "Security & Compliance", description: "Controls, audit readiness, and risk policies", documentCount: 18, status: "active", tags: ["SOC 2", "GRC"] },
+  { id: 2, name: "Product Intelligence", description: "Product strategy, research, and enablement", documentCount: 24, status: "active", tags: ["Product", "Research"] },
+];
+const demoDocs = [
+  { id: 1, filename: "security-architecture.pdf", documentType: "PDF", status: "ready", chunkCount: 86, createdAt: "Aug 14, 2026", knowledgeBaseId: 1 },
+  { id: 2, filename: "employee-handbook.docx", documentType: "DOCX", status: "ready", chunkCount: 62, createdAt: "Aug 13, 2026", knowledgeBaseId: 1 },
+  { id: 3, filename: "q3-product-brief.md", documentType: "Markdown", status: "processing", chunkCount: 41, createdAt: "Aug 13, 2026", knowledgeBaseId: 2 },
+];
+const latencyData = [{ name: "Mon", value: 620 }, { name: "Tue", value: 680 }, { name: "Wed", value: 742 }, { name: "Thu", value: 706 }, { name: "Fri", value: 842 }, { name: "Sat", value: 792 }, { name: "Sun", value: 731 }];
+const queryData = [{ name: "09:00", queries: 28 }, { name: "11:00", queries: 46 }, { name: "13:00", queries: 39 }, { name: "15:00", queries: 64 }, { name: "17:00", queries: 52 }];
 
-  return (
-    <div className="min-h-screen flex flex-col">
-      <main>
-        {/* Example: lucide-react for icons */}
-        <Loader2 className="animate-spin" />
-        Example Page
-        {/* Example: Streamdown for markdown rendering */}
-        <Streamdown>Any **markdown** content</Streamdown>
-        <Button variant="default">Example Button</Button>
-      </main>
-    </div>
-  );
+function Stat({ label, value, detail, icon: Icon, accent = "cyan" }: { label: string; value: string; detail: string; icon: typeof Activity; accent?: "cyan" | "lime" | "violet" | "amber" }) {
+  return <Card className="stat-card"><CardContent className="p-5"><div className="flex items-start justify-between"><div><p className="eyebrow">{label}</p><p className="stat-value mt-3">{value}</p><p className="stat-detail mt-2"><span className={`accent-${accent}`}>{detail.split(" ")[0]}</span> {detail.split(" ").slice(1).join(" ")}</p></div><div className={`icon-tile ${accent}`}><Icon className="h-4 w-4" /></div></div></CardContent></Card>;
 }
+
+function SectionHeading({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: React.ReactNode }) {
+  return <div className="section-heading"><div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p className="section-description">{description}</p></div>{action}</div>;
+}
+
+function SourceChip({ filename, page, relevance }: { filename: string; page?: number; relevance: number }) {
+  return <div className="source-chip"><div className="source-icon"><FileText className="h-3.5 w-3.5" /></div><div className="min-w-0"><p className="truncate">{filename}</p><span>{page ? `Page ${page}` : "Semantic section"} · {Math.round(relevance * 100)}% match</span></div><ArrowUpRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" /></div>;
+}
+
+export default function Home() {
+  const { user, isAuthenticated } = useAuth();
+  const [view, setView] = useState<View>("overview");
+  const [mobileNav, setMobileNav] = useState(false);
+  const [query, setQuery] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string; sources?: Array<{ filename: string; page?: number; relevance: number }> }>>([
+    { role: "assistant", text: "Welcome to the knowledge intelligence workspace. Ask a question across your connected sources and I’ll show the reasoning trail, confidence, and citations behind every answer.", sources: [{ filename: "security-architecture.pdf", page: 12, relevance: 0.96 }] },
+  ]);
+  const [searchResults, setSearchResults] = useState<Array<{ filename: string; page?: number; relevance: number; excerpt: string }>>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const overviewQuery = trpc.rag.overview.useQuery(undefined, { enabled: isAuthenticated });
+  const searchMutation = trpc.rag.search.useMutation();
+  const chatMutation = trpc.rag.chat.useMutation();
+  const uploadMutation = trpc.rag.uploadDocument.useMutation();
+  const overview = overviewQuery.data;
+  const bases = overview?.bases?.length ? overview.bases : demoBases;
+  const docs = overview?.docs?.length ? overview.docs : demoDocs;
+  const metrics = overview?.metrics || { totalQueries: 1248, avgLatency: 842, hitRate: 0.94, errorRate: 0.02 };
+  const role = user?.role === "admin" ? "Admin" : "Analyst";
+
+  const activeLabel = [...nav, ...opsNav].find(item => item.id === view)?.label || "Overview";
+  const runSearch = async () => {
+    if (!query.trim()) return;
+    if (isAuthenticated) {
+      const result = await searchMutation.mutateAsync({ query, topK: 5 });
+      setSearchResults(result.results);
+    } else {
+      setSearchResults([{ filename: "security-architecture.pdf", page: 12, relevance: 0.96, excerpt: "The platform isolates tenant data through scoped knowledge bases, encrypted storage, and auditable access policies." }, { filename: "employee-handbook.docx", page: 8, relevance: 0.82, excerpt: "Access is granted according to role, business need, and the principle of least privilege." }]);
+    }
+  };
+  const sendChat = async () => {
+    if (!chatInput.trim()) return;
+    const current = chatInput.trim();
+    setMessages(previous => [...previous, { role: "user", text: current }]);
+    setChatInput("");
+    if (isAuthenticated) {
+      const result = await chatMutation.mutateAsync({ query: current, knowledgeBaseId: 1 });
+      setMessages(previous => [...previous, { role: "assistant", text: result.answer, sources: result.citations }]);
+    } else {
+      setTimeout(() => setMessages(previous => [...previous, { role: "assistant", text: "The access policy requires role-scoped permissions and auditable retrieval across the connected knowledge base. I found supporting evidence in the security architecture source.", sources: [{ filename: "security-architecture.pdf", page: 12, relevance: 0.96 }, { filename: "employee-handbook.docx", page: 8, relevance: 0.82 }] }]), 350);
+    }
+  };
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!isAuthenticated) { toast.info("Sign in to upload to your secure S3-backed workspace."); return; }
+    const buffer = await file.arrayBuffer();
+    const dataBase64 = btoa(String.fromCharCode(...Array.from(new Uint8Array(buffer))));
+    await uploadMutation.mutateAsync({ knowledgeBaseId: 1, filename: file.name, mimeType: file.type || "text/plain", dataBase64 });
+    toast.success("Document queued for ingestion");
+  };
+
+  return <div className="app-shell">
+    <aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
+      <div className="brand"><div className="brand-mark"><Sparkles className="h-4 w-4" /></div><div><strong>arc<span>mind</span></strong><p>Knowledge intelligence</p></div><button className="mobile-close" onClick={() => setMobileNav(false)}><X className="h-4 w-4" /></button></div>
+      <div className="workspace-switch"><div className="workspace-avatar">AC</div><div><p>Acme Corporation</p><span>Enterprise workspace</span></div><MoreHorizontal className="ml-auto h-4 w-4 text-muted-foreground" /></div>
+      <nav><p className="nav-label">Workspace</p>{nav.map(item => <button key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => { setView(item.id); setMobileNav(false); }}><item.icon className="h-4 w-4" /><span>{item.label}</span>{item.id === "chat" && <span className="live-dot" />}</button>)}<p className="nav-label nav-spacer">Operations</p>{opsNav.map(item => <button key={item.id} className={`nav-item ${view === item.id ? "active" : ""}`} onClick={() => { setView(item.id); setMobileNav(false); }}><item.icon className="h-4 w-4" /><span>{item.label}</span>{item.id === "observability" && <span className="nav-badge">Live</span>}</button>)}</nav>
+      <div className="sidebar-bottom"><div className="system-status"><span className="status-pulse" /><div><p>All systems operational</p><span>Last checked 2 min ago</span></div></div><div className="user-row"><Avatar className="h-8 w-8"><AvatarFallback>{user?.name?.slice(0, 2).toUpperCase() || "AM"}</AvatarFallback></Avatar><div className="min-w-0"><p className="truncate">{user?.name || "Alex Morgan"}</p><span>{role} · {isAuthenticated ? "Connected" : "Preview mode"}</span></div><Settings2 className="ml-auto h-4 w-4 text-muted-foreground" /></div></div>
+    </aside>
+    <main className="main-content">
+      <header className="topbar"><div className="flex items-center gap-3"><button className="mobile-menu" onClick={() => setMobileNav(true)}><Menu className="h-5 w-5" /></button><div className="crumb"><span>Workspace</span><ChevronRight className="h-3.5 w-3.5" /><strong>{activeLabel}</strong></div></div><div className="top-actions"><div className="command-hint"><span>⌘</span> K <span className="hint-label">Search anything</span></div><button className="icon-button"><LifeBuoy className="h-4 w-4" /></button><button className="avatar-button">{user?.name?.slice(0, 2).toUpperCase() || "AM"}</button>{!isAuthenticated && <Button size="sm" onClick={() => startLogin()} className="signin-button">Sign in</Button>}</div></header>
+      <div className="content-wrap">
+        {view === "overview" && <><SectionHeading eyebrow="Workspace overview" title="Good morning, Alex" description="Your knowledge intelligence workspace at a glance." action={<Button onClick={() => setView("documents")} className="primary-button"><Plus className="mr-2 h-4 w-4" /> Add knowledge</Button>} /><div className="stats-grid"><Stat label="Queries this month" value={metrics.totalQueries.toLocaleString()} detail="12.8% vs last month" icon={Zap} accent="cyan" /><Stat label="Average latency" value={`${metrics.avgLatency || 842} ms`} detail="8.4% faster than target" icon={Clock3} accent="lime" /><Stat label="Retrieval hit rate" value={`${Math.round((metrics.hitRate || 0.94) * 100)}%`} detail="3.2% above target" icon={Gauge} accent="violet" /><Stat label="Knowledge sources" value={String(docs.length || 42)} detail="6 added this week" icon={Database} accent="amber" /></div><div className="dashboard-grid mt-6"><Card className="chart-card"><CardHeader className="chart-header"><div><p className="eyebrow">Query performance</p><CardTitle>Response latency</CardTitle></div><Badge variant="outline" className="subtle-badge">Last 7 days <ChevronRight className="ml-1 h-3 w-3" /></Badge></CardHeader><CardContent><div className="chart-legend"><span><i className="legend-dot cyan" />Average latency</span><span className="muted">Target 900 ms</span></div><ResponsiveContainer width="100%" height={210}><LineChart data={latencyData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#263241" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#748094", fontSize: 11 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: "#748094", fontSize: 11 }} width={34} /><Tooltip contentStyle={{ background: "#141b26", border: "1px solid #2a394a", borderRadius: 8, color: "#f7f9fc" }} /><Line type="monotone" dataKey="value" stroke="#47d8f3" strokeWidth={2.5} dot={{ r: 3, fill: "#47d8f3", strokeWidth: 0 }} /></LineChart></ResponsiveContainer></CardContent></Card><Card className="activity-card"><CardHeader className="chart-header"><div><p className="eyebrow">Recent activity</p><CardTitle>Agent execution</CardTitle></div><button className="text-button" onClick={() => setView("observability")}>View all <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></button></CardHeader><CardContent className="activity-list">{[{ icon: Check, title: "Citation validation completed", time: "2 min ago", tone: "lime" }, { icon: Bot, title: "Query Analyzer refined a query", time: "11 min ago", tone: "cyan" }, { icon: UploadCloud, title: "q3-product-brief.md indexed", time: "34 min ago", tone: "violet" }, { icon: ShieldCheck, title: "Access policy evaluated", time: "1 hr ago", tone: "amber" }].map((item, i) => <div className="activity-row" key={i}><div className={`activity-icon ${item.tone}`}><item.icon className="h-3.5 w-3.5" /></div><div><p>{item.title}</p><span>{item.time}</span></div><ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" /></div>)}</CardContent></Card></div><div className="section-row mt-6"><div><p className="eyebrow">Knowledge bases</p><h2>Connected collections</h2></div><button className="text-button" onClick={() => setView("documents")}>Manage collections <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></button></div><div className="base-grid">{bases.slice(0, 3).map((base: any) => <Card className="base-card" key={base.id} onClick={() => setView("documents")}><CardContent className="p-5"><div className="flex items-start justify-between"><div className="collection-icon"><BookOpen className="h-4 w-4" /></div><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></div><h3>{base.name}</h3><p>{base.description}</p><div className="flex items-center gap-2 mt-4"><span className="doc-count"><FileText className="h-3.5 w-3.5" /> {base.documentCount} sources</span><span className="active-status"><i /> Active</span></div></CardContent></Card>)}<Card className="base-card add-card" onClick={() => setView("documents")}><CardContent className="p-5"><div className="add-circle"><Plus className="h-4 w-4" /></div><h3>Create a collection</h3><p>Organize sources around a team, project, or domain.</p><span className="text-button mt-4 inline-flex">Get started <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></span></CardContent></Card></div></>}
+        {view === "documents" && <DocumentsView docs={docs} bases={bases} onUpload={() => fileRef.current?.click()} fileRef={fileRef} onFile={handleUpload} />}
+        {view === "search" && <SearchView query={query} setQuery={setQuery} runSearch={runSearch} results={searchResults} loading={searchMutation.isPending} />}
+        {view === "chat" && <ChatView messages={messages} input={chatInput} setInput={setChatInput} send={sendChat} loading={chatMutation.isPending} onFeedback={(rating) => toast.success(`Feedback recorded: ${rating}`)} />}
+        {view === "evaluation" && <EvaluationView />}
+        {view === "observability" && <ObservabilityView metrics={metrics} />}
+        {view === "admin" && <AdminView role={role} onLogin={() => startLogin()} />}
+      </div>
+    </main>
+  </div>;
+}
+
+function DocumentsView({ docs, bases, onUpload, fileRef, onFile }: { docs: any[]; bases: any[]; onUpload: () => void; fileRef: React.RefObject<HTMLInputElement | null>; onFile: (event: React.ChangeEvent<HTMLInputElement>) => void }) {
+  return <><SectionHeading eyebrow="Knowledge management" title="Knowledge base" description="Organize, govern, and enrich the sources your agents can reason over." action={<><input ref={fileRef} type="file" accept=".pdf,.docx,.txt,.md" className="hidden" onChange={onFile} /><Button className="primary-button" onClick={onUpload}><UploadCloud className="mr-2 h-4 w-4" /> Upload source</Button></>} /><div className="base-grid mb-6">{bases.map((base: any) => <Card className="base-card" key={base.id}><CardContent className="p-5"><div className="flex justify-between"><div className="collection-icon"><Layers3 className="h-4 w-4" /></div><Badge className="status-pill">Active</Badge></div><h3>{base.name}</h3><p>{base.description}</p><div className="progress-label"><span>Ingestion coverage</span><strong>94%</strong></div><Progress value={94} className="h-1.5" /><div className="flex items-center gap-2 mt-4"><span className="doc-count"><FileText className="h-3.5 w-3.5" /> {base.documentCount} sources</span><span className="tag">{base.tags?.[0] || "Internal"}</span></div></CardContent></Card>)}</div><Card className="table-card"><CardHeader className="table-header"><div><p className="eyebrow">Source registry</p><CardTitle>All documents</CardTitle></div><div className="table-actions"><div className="mini-search"><Search className="h-3.5 w-3.5" /><input placeholder="Filter sources" /></div><button className="icon-button"><MoreHorizontal className="h-4 w-4" /></button></div></CardHeader><CardContent className="p-0"><div className="data-table"><div className="data-row header"><span>Source</span><span>Collection</span><span>Status</span><span>Chunks</span><span>Added</span><span /></div>{docs.map((doc: any) => <div className="data-row" key={doc.id}><div className="source-name"><div className="file-type">{doc.documentType?.slice(0, 3) || "DOC"}</div><div><p>{doc.filename}</p><span>{doc.documentType || "Document"}</span></div></div><span>{bases.find((base: any) => base.id === doc.knowledgeBaseId)?.name || "Security & Compliance"}</span><span><span className={`table-status ${doc.status}`}><i />{doc.status === "ready" ? "Indexed" : "Processing"}</span></span><span className="mono">{doc.chunkCount}</span><span className="muted">{doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : "Aug 14, 2026"}</span><MoreHorizontal className="h-4 w-4 text-muted-foreground" /></div>)}</div></CardContent></Card></>;
+}
+
+function SearchView({ query, setQuery, runSearch, results, loading }: { query: string; setQuery: (value: string) => void; runSearch: () => void; results: any[]; loading: boolean }) {
+  return <><SectionHeading eyebrow="Retrieval lab" title="Semantic search" description="Search the knowledge graph with source-level evidence and relevance scoring." /><Card className="search-hero"><div className="search-hero-copy"><div className="hero-icon"><Search className="h-5 w-5" /></div><div><h2>What do you want to know?</h2><p>Search across 42 sources with semantic retrieval, re-ranking, and access-aware filtering.</p></div></div><div className="search-input-wrap"><Search className="h-5 w-5 text-muted-foreground" /><Input value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => event.key === "Enter" && runSearch()} placeholder="Try: How are tenant access policies enforced?" /><Button onClick={runSearch} disabled={loading} className="primary-button">{loading ? "Searching…" : "Search"}</Button></div><div className="search-hints"><span>Suggested queries</span><button onClick={() => setQuery("How are tenant access policies enforced?")}>Tenant access policies</button><button onClick={() => setQuery("What is the incident response SLA?")}>Incident response SLA</button><button onClick={() => setQuery("Which controls support SOC 2?")}>SOC 2 controls</button></div></Card><div className="section-row mt-7"><div><p className="eyebrow">Evidence set</p><h2>{results.length ? `${results.length} relevant sources` : "Search results will appear here"}</h2></div>{results.length > 0 && <Badge variant="outline" className="subtle-badge">Re-ranked · live</Badge>}</div><div className="result-list">{results.length === 0 ? <Card className="empty-card"><div className="empty-icon"><Sparkles className="h-5 w-5" /></div><h3>Start with a question</h3><p>Every result includes the matching passage, collection context, and relevance score so your team can verify the answer.</p></Card> : results.map((result, index) => <Card className="result-card" key={`${result.filename}-${index}`}><CardContent className="p-5"><div className="result-top"><div className="rank">0{index + 1}</div><div className="min-w-0"><h3>{result.filename}</h3><p>{result.page ? `Page ${result.page} · ` : "Semantic section · "}{Math.round(result.relevance * 100)}% relevance</p></div><Badge className="match-badge">{Math.round(result.relevance * 100)}% match</Badge></div><p className="excerpt">{result.excerpt}</p><div className="result-footer"><span><LockKeyhole className="h-3.5 w-3.5" /> Access verified</span><button className="text-button">Open source <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></button></div></CardContent></Card>)}</div></>;
+}
+
+function ChatView({ messages, input, setInput, send, loading, onFeedback }: { messages: any[]; input: string; setInput: (value: string) => void; send: () => void; loading: boolean; onFeedback: (rating: string) => void }) {
+  return <><SectionHeading eyebrow="AI workspace" title="Ask your knowledge base" description="Multi-agent reasoning with transparent evidence, confidence, and traceability." action={<Badge className="live-badge"><span /> Multi-agent runtime</Badge>} /><div className="chat-layout"><Card className="chat-card"><CardContent className="p-0"><div className="chat-toolbar"><div className="flex items-center gap-3"><div className="agent-avatar"><Bot className="h-4 w-4" /></div><div><p className="font-medium">ArcMind Research Agent</p><span>Security & Compliance · access-aware</span></div></div><button className="icon-button"><MoreHorizontal className="h-4 w-4" /></button></div><div className="messages">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><div className="message-avatar">{message.role === "assistant" ? <Sparkles className="h-3.5 w-3.5" /> : "AM"}</div><div className="message-body"><div className="message-bubble">{message.text}</div>{message.role === "assistant" && <>{message.sources?.length > 0 && <div className="message-sources"><div className="source-header"><span>Sources used</span><span>{message.sources.length} citations</span></div>{message.sources.map((source: any, sourceIndex: number) => <SourceChip key={sourceIndex} filename={source.filename} page={source.page} relevance={source.relevance} />)}</div>}<div className="message-meta"><span className="confidence"><i /> Confidence 96%</span><span>842 ms</span><span>148 tokens</span><div className="feedback"><button onClick={() => onFeedback("up")}><ThumbsUp className="h-3.5 w-3.5" /></button><button onClick={() => onFeedback("down")}><ThumbsDown className="h-3.5 w-3.5" /></button></div></div></>}</div></div>)}{loading && <div className="message assistant"><div className="message-avatar"><Sparkles className="h-3.5 w-3.5" /></div><div className="message-bubble typing"><span /><span /><span /></div></div>}</div><div className="chat-composer"><Textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="Ask a question about your sources…" /><div className="composer-footer"><span><LockKeyhole className="h-3.5 w-3.5" /> Grounded answers only</span><Button onClick={send} disabled={loading} className="primary-button">Send <ArrowUpRight className="ml-2 h-4 w-4" /></Button></div></div></CardContent></Card><Card className="trace-card"><CardHeader><p className="eyebrow">Reasoning trace</p><CardTitle>Agent path</CardTitle><p className="trace-description">This response completed in <strong>842 ms</strong>.</p></CardHeader><CardContent><div className="trace-list">{["Query Analyzer", "Retrieval Agent", "Evidence Validator", "Answer Generator", "Citation Validator", "Quality Checker"].map((item, index) => <div className="trace-row" key={item}><div className="trace-line"><span className="trace-node"><Check className="h-3 w-3" /></span>{index < 5 && <i />}</div><div><p>{item}</p><span>{[48, 218, 71, 390, 42, 73][index]} ms</span></div><Check className="ml-auto h-3.5 w-3.5 text-lime-300" /></div>)}</div><div className="trace-summary"><div><span>Sources retrieved</span><strong>5</strong></div><div><span>Confidence</span><strong>0.96</strong></div><div><span>Citation coverage</span><strong>100%</strong></div></div></CardContent></Card></div></>;
+}
+
+function EvaluationView() { return <><SectionHeading eyebrow="Quality system" title="Evaluation center" description="Measure retrieval relevance, faithfulness, and citation coverage over time." action={<Button className="primary-button"><Zap className="mr-2 h-4 w-4" /> Run evaluation</Button>} /><div className="stats-grid"><Stat label="Faithfulness" value="96.8%" detail="2.4% since last run" icon={ShieldCheck} accent="lime" /><Stat label="Citation coverage" value="100%" detail="All grounded answers cited" icon={BookOpen} accent="cyan" /><Stat label="Context precision" value="91.4%" detail="5.2% above baseline" icon={Layers3} accent="violet" /><Stat label="Test cases" value="248" detail="18 pending review" icon={Check} accent="amber" /></div><div className="dashboard-grid mt-6"><Card className="chart-card"><CardHeader><p className="eyebrow">Quality score</p><CardTitle>Evaluation trend</CardTitle></CardHeader><CardContent><ResponsiveContainer width="100%" height={220}><LineChart data={[{ name: "W1", value: 88 }, { name: "W2", value: 91 }, { name: "W3", value: 93 }, { name: "W4", value: 96.8 }]}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#263241" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#748094", fontSize: 11 }} /><YAxis domain={[80, 100]} axisLine={false} tickLine={false} tick={{ fill: "#748094", fontSize: 11 }} /><Line dataKey="value" stroke="#b8f36a" strokeWidth={2.5} dot={{ r: 4, fill: "#b8f36a", strokeWidth: 0 }} /></LineChart></ResponsiveContainer></CardContent></Card><Card className="activity-card"><CardHeader><p className="eyebrow">Review queue</p><CardTitle>Items needing attention</CardTitle></CardHeader><CardContent className="activity-list">{["Low confidence response · Q-1842", "Citation mismatch · Q-1838", "Retrieval miss · Q-1829"].map((item, index) => <div className="activity-row" key={item}><div className={`activity-icon ${index === 1 ? "amber" : "violet"}`}><ShieldCheck className="h-3.5 w-3.5" /></div><div><p>{item}</p><span>{index + 1}h ago · assign reviewer</span></div><ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" /></div>)}</CardContent></Card></div></> }
+
+function ObservabilityView({ metrics }: { metrics: any }) { return <><SectionHeading eyebrow="System health" title="Observability" description="Trace every query from retrieval to answer synthesis and keep production performance visible." action={<Badge className="live-badge"><span /> Live telemetry</Badge>} /><div className="stats-grid"><Stat label="Queries today" value="1,248" detail="12.8% vs last month" icon={BarChart3} accent="cyan" /><Stat label="P95 latency" value="1.24 s" detail="Within 1.5 s SLO" icon={Clock3} accent="lime" /><Stat label="Retrieval hit rate" value={`${Math.round((metrics.hitRate || 0.94) * 100)}%`} detail="Target ≥ 90%" icon={Database} accent="violet" /><Stat label="Error rate" value={`${Math.round((metrics.errorRate || 0.02) * 100)}%`} detail="Below 10% alert threshold" icon={Activity} accent="amber" /></div><div className="dashboard-grid mt-6"><Card className="chart-card"><CardHeader><p className="eyebrow">Traffic profile</p><CardTitle>Queries by hour</CardTitle></CardHeader><CardContent><ResponsiveContainer width="100%" height={220}><BarChart data={queryData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#263241" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#748094", fontSize: 11 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: "#748094", fontSize: 11 }} /><Bar dataKey="queries" fill="#9d8cff" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></CardContent></Card><Card className="trace-card"><CardHeader><p className="eyebrow">Live trace stream</p><CardTitle>Recent agent events</CardTitle></CardHeader><CardContent className="activity-list">{["Citation Validator completed", "Retriever returned 5 candidates", "LLM response synthesized", "Query Analyzer completed"].map((item, index) => <div className="activity-row" key={item}><div className="activity-icon cyan"><Activity className="h-3.5 w-3.5" /></div><div><p>{item}</p><span>trace_{"8f2c" + index} · {index + 1} min ago</span></div><span className="mono ml-auto">{[42, 218, 390, 48][index]} ms</span></div>)}</CardContent></Card></div></> }
+
+function AdminView({ role, onLogin }: { role: string; onLogin: () => void }) { return <><SectionHeading eyebrow="Governance" title="Admin console" description="Control people, policies, ingestion jobs, and operational thresholds." action={role === "Admin" ? <Button className="primary-button"><Settings2 className="mr-2 h-4 w-4" /> Configure system</Button> : <Button onClick={onLogin} variant="outline">Request admin access</Button>} /><div className="admin-grid"><Card className="admin-card"><CardContent><div className="admin-card-icon cyan"><Users className="h-5 w-5" /></div><h3>User access</h3><p>Review 24 members and enforce admin or analyst permissions.</p><div className="admin-metric"><strong>24</strong><span>active members</span></div><button className="text-button">Manage users <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></button></CardContent></Card><Card className="admin-card"><CardContent><div className="admin-card-icon violet"><UploadCloud className="h-5 w-5" /></div><h3>Ingestion jobs</h3><p>Monitor processing status and investigate failed document jobs.</p><div className="admin-metric"><strong>3</strong><span>processing now</span></div><button className="text-button">Open job queue <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></button></CardContent></Card><Card className="admin-card"><CardContent><div className="admin-card-icon amber"><Headphones className="h-5 w-5" /></div><h3>Owner alerts</h3><p>Notifications fire for ingestion failures and elevated query errors.</p><div className="admin-metric"><strong>10%</strong><span>error rate threshold</span></div><button className="text-button">Edit thresholds <ArrowUpRight className="ml-1 h-3.5 w-3.5" /></button></CardContent></Card></div><Card className="table-card mt-6"><CardHeader><p className="eyebrow">Access matrix</p><CardTitle>Role permissions</CardTitle></CardHeader><CardContent className="p-0"><div className="data-table"><div className="data-row header"><span>Capability</span><span>Admin</span><span>Analyst</span><span>User</span></div>{[["Manage users", "Full", "—", "—"], ["Upload sources", "Full", "Full", "Scoped"], ["Run evaluation", "Full", "Full", "View"], ["System configuration", "Full", "—", "—"]].map(row => <div className="data-row permission-row" key={row[0]}><span>{row[0]}</span><span className={row[1] === "Full" ? "permission-full" : "muted"}>{row[1]}</span><span className={row[2] === "Full" ? "permission-full" : "muted"}>{row[2]}</span><span className={row[3] === "Full" ? "permission-full" : "muted"}>{row[3]}</span></div>)}</div></CardContent></Card></> }
